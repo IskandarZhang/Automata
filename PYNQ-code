@@ -1,0 +1,226 @@
+from time import sleep
+from pynq.overlays.base import BaseOverlay
+from pynq.lib.video import *
+from pynq.lib import MicroblazeLibrary
+import numpy as np
+import cv2
+from pylab import *
+
+base = BaseOverlay("base.bit")
+base.leds[0].off()   #开机时灯光全灭
+
+lib = MicroblazeLibrary(base.RPI, ['uart'])
+device = lib.uart_open(14, 15)     #将GPIO14与15定义为TxD和RxD
+
+Mode = VideoMode(640, 480, 24)
+hdmi_out = base.video.hdmi_out
+hdmi_out.configure(Mode, PIXEL_BGR)
+hdmi_out.start()
+print("HDMI Initialized")   #HDMI初始化
+
+# monitor (output) frame buffer size
+frame_out_w = 1600
+frame_out_h = 900
+# camera (input) configuration
+frame_in_w = 640
+frame_in_h = 480
+
+before_x = 0
+before_y = 0
+
+cap = cv2.VideoCapture(0)
+cap.set(cv2.CAP_PROP_FRAME_WIDTH, frame_in_w);
+cap.set(cv2.CAP_PROP_FRAME_HEIGHT, frame_in_h);
+cap.open(0)
+
+x = 320
+y = 240
+flag = 0
+a = []
+b = []
+
+base.leds[0].on()   #0号和2号灯光亮起代表即将进入标定模式
+base.leds[2].on()
+
+while 1:
+    if base.buttons[0].read() == 1:  #按压0号按键进入标定模式
+        break
+    else:
+        continue
+
+for n in range(4):
+    base.leds[n].off()
+
+print("cap Initialized")
+while 1:
+
+    # t0 = time.time()
+    ret, frame = cap.read()
+    if ret != True:
+        print('false')
+    # t1 = time.time()
+    cv2.circle(frame, (x, y), 5, (0, 0, 0), 1)
+
+    while base.buttons[0].read() == 1:
+        x = x + 1
+        # cv2.circle(frame, (x, y), 5, (255, 255, 255), 1)
+        outframe = hdmi_out.newframe()    
+        outframe[0:480, 0:640, :] = frame[0:480, 0:640, :]
+        hdmi_out.writeframe(outframe)  
+        flag = 0      #通过HDMI上在外接显示器上对视频进行显示
+
+    while base.buttons[1].read() == 1:
+        x = x - 1
+        # cv2.circle(frame, (x, y), 5, (255, 255, 255), 1)
+        outframe = hdmi_out.newframe()
+        outframe[0:480, 0:640, :] = frame[0:480, 0:640, :]
+        hdmi_out.writeframe(outframe)
+        flag = 0
+
+    while base.buttons[2].read() == 1:
+        y = y + 1
+        # cv2.circle(frame, (x, y), 5, (255, 255, 255), 1)
+        outframe = hdmi_out.newframe()
+        outframe[0:480, 0:640, :] = frame[0:480, 0:640, :]
+        hdmi_out.writeframe(outframe)
+        flag = 0
+
+    while base.buttons[3].read() == 1:
+        y = y - 1
+        # cv2.circle(frame, (x, y), 5, (255, 255, 255), 1)
+        outframe = hdmi_out.newframe()
+        outframe[0:480, 0:640, :] = frame[0:480, 0:640, :]
+        hdmi_out.writeframe(outframe)
+        flag = 0
+
+    if (x - before_x == 0) & (y - before_y == 0):  # 判断按住四个角
+        flag = flag + 1
+        if flag >= 100:
+            for n in range(4):
+                base.leds[n].on()
+
+            time.sleep(0.5)
+
+            a.append(x)
+            b.append(y)
+
+            print(flag)
+            flag = 0
+            for n in range(4):
+                base.leds[n].off()
+
+    before_x = x
+    before_y = y
+    # t2 = time.time()
+    # print(t2-t0,t1-t0)
+
+    if len(a) == 4:
+        break
+
+while True:
+
+    # t0 = time.time()
+    ret, frame = cap.read()  # 获取原图
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)  # 灰度化
+    blur = cv2.GaussianBlur(gray, (5, 5), 0)  # 高斯滤波，使之平滑
+
+    ret, thresh1 = cv2.threshold(blur, 120, 255, cv2.THRESH_BINARY)  # 阈值化，非黑即白
+    opening = cv2.Canny(thresh1, 70, 150)  # 边缘检测
+
+    # 下面一部分是图像的截取
+    src_points = np.float32([[a[0], b[0]], [a[1], b[1]], [a[2], b[2]], [a[3], b[3]]])
+    dst_points = np.float32([[0, 0], [384, 0], [0, 214], [384, 214]])
+    projective_martix = cv2.getPerspectiveTransform(src_points, dst_points)
+    projective_image = cv2.warpPerspective(opening, projective_martix, (384, 214), cv2.INTER_LINEAR)
+
+    tempimg = cv2.resize(projective_image, (384, 214))
+    tempimg1 = cv2.resize(tempimg, (1536, 856), 0)
+
+    # 数据初始化
+    sum1 = 0
+    sum2 = 0
+    n = 0
+
+    # 计算平均点
+    for i in range(214):
+        for j in range(384):
+            if tempimg[i, j]:
+                sum1 = sum1 + i
+                sum2 = sum2 + j
+                n = n + 1
+                # print(n)
+
+    # 得到中心点
+    if n > 0:  
+        print('yes')
+        i = int(sum1 / n)
+        j = int(sum2 / n)
+        # print(4*j, 4*i)
+
+        x_axis = j
+        y_axis = i
+
+        # 判断是否为单指
+        for w in range(383):
+            px = tempimg[i, w]
+            pxplus = tempimg[i, w + 1]
+            # print(px)
+            if px - pxplus > 200:
+                finger_4 = finger_4 + 1
+        if finger_4 >= 3:
+            finger = 0
+        # print(finger_4)
+        # Pymouse库的使用
+
+        # 点击
+        s = abs(before_i - i)
+        if finger == 1 and s < 3:
+            m.click(4 * j, 4 * i)
+            # print(1)
+            time.sleep(0.5)
+
+        if finger == 1 and s >= 3:  # 判断为点击
+            c = 1
+
+        # 拖动 # 判断向上划还是向下滑
+        d = int((before_i - i)/10)
+        if finger == 0 and -40 < d < 40: # 判断是拖动
+            c = 2
+        t1 = time.time()
+
+        print(finger, finger_4, before_i, i, int((before_i - i) / 6), s, t1 - t0)
+
+        j0, i0 = m.position()
+        if before_n != 0:
+
+            print(0)
+
+        elif before_n == 0:  # 判断为长按拖动
+            z = 3
+            # print(1)
+
+        # print(before_i, before_j, i, j)
+        before_i = i
+        before_j = j
+
+        # if n == 0 and before_n != 0:
+        # m.release(4 * before_j, 4 * before_i)
+
+        before_n = n
+
+        print(x_axis, y_axis)  # 得到x,y的坐标，以及操作
+
+        if (x_axis > 100):
+            data = str(10000 * x_axis + 10 * y_axis + c)
+        elif (x_axis > 10):
+            data = '0' + str(10000 * x_axis + 10 * y_axis + c)
+        else:
+            data = '00' + str(10000 * x_axis + 10 * y_axis + c)
+
+        for i in range(len(data)):
+            lib.uart_write(device, [int(data[i]) + 48], len(data[i]))    #串口发送坐标值和操作位
+
+    if base.buttons[0].read() == 1:
+        break
+cap.release()
+cv2.destroyAllWindows()
