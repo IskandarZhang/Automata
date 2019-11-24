@@ -1,0 +1,45 @@
+import pymouse, pykeyboard, os, sys
+from pymouse import *
+import time
+import serial
+
+m = PyMouse()
+
+ser = serial.Serial(
+    port='COM5',
+    baudrate=900,
+    parity=serial.PARITY_ODD,  # 校验位
+    stopbits=serial.STOPBITS_TWO,  # 停止位
+    bytesize=serial.SEVENBITS  # 数据位
+)
+data = ''
+
+while True:
+    data = ser.read(7)
+    s = int(data)
+
+    # 解码
+    x = int(s/10000)
+    y = int((s - 10000*int(s/10000))/10)
+    z = int((s - 10000*int(s/10000))-10*y)
+
+    # t = time.time()
+    # ct = time.ctime(t)
+    # print(ct, ':')
+    # print(x, y, z)
+    # m.move(4 * y, 4 * x)
+
+    # 点击
+    if z == 1:
+        m.click(4 * y, 4 * x)
+
+    # 滚动
+    if z == 2:
+        m.scroll((-1 * 10), None, None)  # 向上为正，向下为负
+        # print(100)
+        # time.sleep(0.2)
+
+    # 长按拖动
+    if z == 3:
+        m.release(4 * y, 4 * x)
+        time.sleep(0.12)
